@@ -9,7 +9,7 @@ Terse, code-focused steering for AI working on `rouxtaccess/laravel-sync`. Read 
 ## Ground rules (repeated from the root CLAUDE.md)
 
 - Keep `composer test`, `vendor/bin/phpstan analyse`, and `vendor/bin/pint` green.
-- PHP 8.2 syntax floor, Laravel 10 to 13. Spatie PHP conventions (protected over private, early returns, guard clauses).
+- PHP 8.2 syntax floor, Laravel 12 to 13. Spatie PHP conventions (protected over private, early returns, guard clauses).
 - Documentation must not use dashes as punctuation.
 - Never write code that pushes data upstream. A sync only creates local databases and copies downward.
 - Secrets live in the gitignored `sync-jobs.json`. Never commit or print it.
