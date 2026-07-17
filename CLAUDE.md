@@ -12,7 +12,7 @@ A developer tool, distributed as a Laravel package, that pulls production data (
 
 - Commands: `rouxt:sync {group?} {--yes} {--force}` and `rouxt:sync-install`.
 - Quality gates, all three must stay green: `composer test` (Pest), `vendor/bin/phpstan analyse`, `vendor/bin/pint`.
-- Supports PHP 8.2 to 8.5 and Laravel 10 to 13. Do not use syntax newer than PHP 8.2.
+- Supports PHP 8.2 to 8.5 and Laravel 12 to 13. Do not use syntax newer than PHP 8.2.
 - Follow the `php-guidelines-from-spatie` skill: prefer `protected` over `private`, return early instead of `else`, split compound `if`s, and use `/* */` block comments in config with defaults noted.
 - Documentation (this file, `docs/`, `README.md`) must not use dashes as punctuation. Rephrase with commas, periods, or parentheses. Hyphens inside identifiers such as `db-over-ssh` and flags such as `--force` are fine.
 - Groups persist to a gitignored plain-JSON file, `sync-jobs.json`, that holds plaintext secrets. Never commit it, never print its contents. `sync-jobs.example.json` is a valid-JSON reference of the shape.

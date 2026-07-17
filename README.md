@@ -21,7 +21,7 @@ Refreshing local data from production usually means a pile of one off bash scrip
 ## Requirements
 
 * PHP 8.2, 8.3, 8.4 or 8.5
-* Laravel 10, 11, 12 or 13
+* Laravel 12 or 13
 * The relevant client binaries on your machine for the jobs you run: `ssh`, `rsync`, `mysqldump` / `mysql`, `pg_dump` / `psql`, `sqlite3`, and the `aws` CLI.
 
 ## Installation
