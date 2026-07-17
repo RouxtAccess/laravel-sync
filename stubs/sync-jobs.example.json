@@ -1,0 +1,56 @@
+{
+    "production": {
+        "jobs": [
+            {
+                "name": "db",
+                "type": "db-over-ssh",
+                "config": {
+                    "driver": "mysql",
+                    "ssh": "forge@1.2.3.4",
+                    "db_host": "127.0.0.1",
+                    "db_port": 3306,
+                    "db_name": "forge",
+                    "db_user": "forge",
+                    "db_pass": "secret",
+                    "target_prefix": "myapp"
+                },
+                "after": ["swap-env-database", "run-migrations"]
+            },
+            {
+                "name": "storage",
+                "type": "files-over-ssh",
+                "config": {
+                    "ssh": "forge@1.2.3.4",
+                    "remote_path": "/home/forge/myapp.com/storage/app/public",
+                    "local_path": "storage/app/public",
+                    "delete": false
+                }
+            }
+        ]
+    },
+    "from-backups": {
+        "jobs": [
+            {
+                "name": "db",
+                "type": "db-from-s3",
+                "config": {
+                    "driver": "mysql",
+                    "s3_path": "s3://myapp-db-backups/mysql/",
+                    "aws_profile": "default",
+                    "target_prefix": "myapp"
+                },
+                "after": ["swap-env-database"]
+            },
+            {
+                "name": "media",
+                "type": "s3-sync",
+                "config": {
+                    "source": "s3://myapp-prod-media",
+                    "destination": "s3://myapp-local-media",
+                    "aws_profile": "default",
+                    "delete": false
+                }
+            }
+        ]
+    }
+}

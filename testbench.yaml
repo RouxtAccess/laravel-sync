@@ -1,0 +1,2 @@
+providers:
+  - Rouxtaccess\Sync\SyncServiceProvider
