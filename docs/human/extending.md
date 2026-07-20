@@ -75,6 +75,7 @@ new Field(
 A sync type answers three questions: what to ask (`fields`), what to show in the plan (`summary`), and what to do (`run`). `run` returns a `SyncResult`.
 
 ```php
+use Rouxtaccess\Sync\Contracts\ProgressReporter;
 use Rouxtaccess\Sync\Contracts\SyncType;
 use Rouxtaccess\Sync\Field;
 use Rouxtaccess\Sync\SyncResult;
@@ -113,7 +114,7 @@ class RedisSyncType implements SyncType
         ];
     }
 
-    public function run(array $job, bool $interactive): SyncResult
+    public function run(array $job, bool $interactive, ProgressReporter $progress): SyncResult
     {
         $config = $job['config'] ?? [];
 
@@ -131,22 +132,46 @@ class RedisSyncType implements SyncType
 
 `run` and `summary` receive the whole job. The answers to your `fields()` live in `$job['config']`, so most types start with `$config = $job['config'] ?? [];`.
 
-For a database style type, reuse the traits that already handle the hard parts:
+The third argument to `run` is a `ProgressReporter`. It is required, but you decide how much to use it. The simplest types ignore it (as the Redis example does, leaning on `spin` for a spinner). To report real progress instead, call `$progress->start('Copying keys', $total)` before the work, `$progress->advance(1, $detail)` as each unit completes, and `$progress->finish('Copied keys.')` at the end. The command hands you a live bar on an interactive terminal, or a plain-line reporter for `--yes` and piped output, so the same calls work in both. See "Reporting progress" below.
 
-- `Concerns\InteractsWithDatabaseDriver` gives you `driver()`, `driverField()`, `targetDatabase()`, and `resolveTarget()` (the abort / replace / rename flow for an existing local database).
-- `Concerns\InteractsWithAfterHooks` gives you `planAfterHooks()` and `runAfterHooks()`.
+For a database style type, reuse the trait that already handles the hard parts:
+
+- `Concerns\FetchesAndLoadsDatabase` gives you the fetch-then-load flow. Your `run()` resolves the local target first with `resolveLoadTarget()` (returning a failure when it hands back null, which happens before any fetch so a run that will be turned away never touches production), offers to reuse a recent dump with `chooseDump()`, provides its own `fetchDump()` (pull the remote data to a file) when none is reused, then calls the trait's `loadDump()` with that file and target. `loadDump()` imports into a fresh local database, drives the per-table progress bar, runs the after-hooks, and rolls back on failure. It also gives you `dumpStore()`. It pulls in `InteractsWithDatabaseDriver` (`driver()`, `driverField()`, `targetDatabase()`, `resolveTarget()`), `InteractsWithAfterHooks` (`planAfterHooks()`, `runAfterHooks()`), and `StreamsProcessProgress` for you.
 
 Study `src/Types/DbOverSshSyncType.php` as the reference implementation.
 
+### Reporting progress
+
+`run` receives a `Rouxtaccess\Sync\Contracts\ProgressReporter` as its third argument, with four methods:
+
+| Method | Meaning |
+| --- | --- |
+| `start(string $label, ?int $total = null)` | Begin a phase. Pass a known total for a determinate bar, or `null` when the size is not yet known (it renders as indeterminate until a later `setTotal()`) |
+| `setTotal(int $total)` | Upgrade to a known total once it becomes available mid-phase |
+| `advance(int $step = 1, ?string $detail = null)` | Advance the phase, optionally replacing the detail line (for example the table currently importing) |
+| `finish(?string $message = null)` | Finish the phase, optionally printing a closing message |
+
+Three implementations live in `src/Progress/`: `NullProgressReporter` (a no-op, used in tests or when the caller wants silence), `LineProgressReporter` (plain append-only lines for non-interactive runs), and `PromptsProgressReporter` (a live bar for interactive terminals). The command picks the right one, so your type only ever calls the four methods. To size a bar you often need a count up front (the remote table count, the number of S3 objects); the built-in types run a small counting command first, then advance per unit.
+
 ### The interactive flag and SyncResult
 
-`run(array $config, bool $interactive)` receives `$interactive = false` when the user passed `--yes` or there is no terminal. Respect it: do not prompt when it is false, and choose safe defaults (for example, abort on a name clash rather than overwrite).
+`run(array $job, bool $interactive, ProgressReporter $progress)` receives `$interactive = false` when the user passed `--yes` or there is no terminal. Respect it: do not prompt when it is false, and choose safe defaults (for example, abort on a name clash rather than overwrite, and always fetch a fresh dump rather than offering to reuse one).
 
 `SyncResult::success($message, $data)` and `SyncResult::failure($message)` are the only two outcomes. For database types, put the imported database name in `$data` (`['database' => $target]`) so after-hooks can use it.
 
 ## Add a database engine
 
-Implement `Contracts\DatabaseDriver`. It creates and drops the local database, checks existence, and returns the shell fragments for the dump, sanitize, and import pipeline. Local client settings come from `config('database.connections.*')`, so your engine talks to the same database your app does.
+Implement `Contracts\DatabaseDriver`. It creates and drops the local database, checks existence, and returns the shell fragments for the dump, sanitize, and import pipeline, plus a few fragments that let a sync size and advance its progress bars. Local client settings come from `config('database.connections.*')`, so your engine talks to the same database your app does.
+
+The progress-related members are:
+
+| Member | Meaning |
+| --- | --- |
+| `dumpCommand(array $remote, int $port, bool $verbose = false)` | The dump command. When `$verbose` is true it should also print a per-table line to stderr so a fetch can report progress |
+| `countTablesCommand(array $remote, int $port): ?string` | A command that prints the number of remote tables to stdout, used to size the fetch bar. Return `null` for engines that cannot be counted over a port |
+| `dumpProgressPattern(): ?string` | A POSIX extended regular expression matching a per-table line in the verbose dump's stderr, used to advance the fetch bar. Return `null` when the engine emits no such markers |
+| `dataMarker(): ?string` | A POSIX extended regular expression matching the per-table data marker inside a dump file (for example mysqldump's `-- Dumping data for table`). Used to both size and advance the import bar. Return `null` when the dumps carry no such marker |
+| `isDumpNoise(string $line): bool` | Whether a line on the verbose dump's stderr is progress chatter rather than a real error, so a failed fetch reports only the error. Return `false` for engines whose dump prints no verbose output |
 
 Rules to follow, copied from the built in drivers:
 
@@ -234,8 +259,8 @@ Or remove a type your team should never use by leaving it out of the array. What
 
 Extensions are easy to test the same way the package tests itself.
 
-- Assert command construction with `Process::fake()` and `Process::assertRan(...)` instead of running the real binary.
+- Assert command construction with `Process::fake()`, then inspect the recorded commands, instead of running the real binary.
 - Run anonymizers and database-touching hooks against the in-memory SQLite connection, building a table with the schema builder and asserting on the rows.
-- For a sync type, call `run($config, false)` directly and assert on the returned `SyncResult`.
+- For a sync type, call `run($job, false, new NullProgressReporter)` directly (the progress reporter is required) and assert on the returned `SyncResult`. For a fetch-and-load database type, point `sync.dumps.path` at a temp directory so the fetch has somewhere to write.
 
 The `tests/` directory has working examples of each. A real end to end sync needs production access (SSH keys, AWS credentials), so keep that final live check for a developer who has it.

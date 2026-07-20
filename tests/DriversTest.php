@@ -77,6 +77,64 @@ it('exposes the expected default ports', function () {
         ->and((new SqliteDriver)->defaultPort())->toBe(0);
 });
 
+it('adds --verbose to the dump command only when asked', function () {
+    $remote = ['db_user' => 'forge', 'db_name' => 'forge', 'db_pass' => 'pw'];
+
+    expect((new MysqlDriver)->dumpCommand($remote, 3306))->not->toContain('--verbose')
+        ->and((new MysqlDriver)->dumpCommand($remote, 3306, verbose: true))->toContain('--verbose')
+        ->and((new PostgresDriver)->dumpCommand($remote, 5432))->not->toContain('--verbose')
+        ->and((new PostgresDriver)->dumpCommand($remote, 5432, verbose: true))->toContain('--verbose');
+});
+
+it('exposes progress markers for the network engines and none for sqlite', function () {
+    $mysql = new MysqlDriver;
+    $postgres = new PostgresDriver;
+    $sqlite = new SqliteDriver;
+
+    expect($mysql->dumpProgressPattern())->toContain('table structure')
+        ->and($mysql->dataMarker())->toContain('Dumping data for table')
+        ->and($postgres->dumpProgressPattern())->toContain('dumping contents of table')
+        ->and($postgres->dataMarker())->toContain('TABLE DATA');
+
+    expect($sqlite->dumpProgressPattern())->toBeNull()
+        ->and($sqlite->dataMarker())->toBeNull()
+        ->and($sqlite->countTablesCommand([], 0))->toBeNull();
+});
+
+it('counts tables through the tunnel port for the network engines', function () {
+    $mysql = (new MysqlDriver)->countTablesCommand(['db_user' => 'forge', 'db_name' => 'forge', 'db_pass' => 'pw'], 3307);
+    $postgres = (new PostgresDriver)->countTablesCommand(['db_user' => 'forge', 'db_name' => 'forge', 'db_pass' => 'pw'], 5433);
+
+    expect($mysql)->toContain('information_schema.tables')
+        ->toContain('-h 127.0.0.1')
+        ->toContain('-P '.escapeshellarg('3307'));
+
+    expect($postgres)->toContain('information_schema.tables')
+        ->toContain('BASE TABLE')
+        ->toContain('-p '.escapeshellarg('5433'));
+});
+
+it('classifies mysqldump verbose comments as noise but keeps real errors', function () {
+    $driver = new MysqlDriver;
+
+    expect($driver->isDumpNoise('-- Retrieving table structure for table users...'))->toBeTrue()
+        ->and($driver->isDumpNoise('-- Connecting to localhost...'))->toBeTrue()
+        ->and($driver->isDumpNoise('mysqldump: Got error: 2013: Lost connection to MySQL server'))->toBeFalse();
+});
+
+it('classifies pg_dump verbose lines as noise but keeps errors and warnings', function () {
+    $driver = new PostgresDriver;
+
+    expect($driver->isDumpNoise('pg_dump: dumping contents of table "public.users"'))->toBeTrue()
+        ->and($driver->isDumpNoise('pg_dump: error: connection to server failed'))->toBeFalse()
+        ->and($driver->isDumpNoise('pg_dump: warning: could not resolve dependency'))->toBeFalse()
+        ->and($driver->isDumpNoise('FATAL: database "app" does not exist'))->toBeFalse();
+});
+
+it('treats no sqlite dump output as noise', function () {
+    expect((new SqliteDriver)->isDumpNoise('anything'))->toBeFalse();
+});
+
 it('falls back to a mysql-driver connection under a non-conventional name', function () {
     config()->set('database.connections', [
         'primary' => [

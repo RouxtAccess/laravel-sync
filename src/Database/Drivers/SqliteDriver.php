@@ -61,9 +61,29 @@ class SqliteDriver implements DatabaseDriver
         return File::exists(self::path($database));
     }
 
-    public function dumpCommand(array $remote, int $port): string
+    public function dumpCommand(array $remote, int $port, bool $verbose = false): string
     {
         throw new RuntimeException('SQLite cannot be dumped over an SSH tunnel. Use a files-over-ssh job to copy the database file instead.');
+    }
+
+    public function countTablesCommand(array $remote, int $port): ?string
+    {
+        return null;
+    }
+
+    public function dumpProgressPattern(): ?string
+    {
+        return null;
+    }
+
+    public function dataMarker(): ?string
+    {
+        return null;
+    }
+
+    public function isDumpNoise(string $line): bool
+    {
+        return false;
     }
 
     public function importCommand(string $database): string

@@ -13,6 +13,8 @@ Sync is built around named **groups** of **jobs**. A job is one unit of work (a 
 Refreshing local data from production usually means a pile of one off bash scripts. This package turns that into a reusable, safe, interactive tool:
 
 * Databases are dumped live over an SSH tunnel, so nothing extra needs to be installed on the production server.
+* Every job reports live progress. An interactive terminal draws a progress bar (per table for databases, per file for S3, a percent for rsync). A non-interactive run (`--yes`) or piped output prints plain progress lines instead.
+* Database syncs pull a dump to a file first, then import it, so you can pull once and re-import the same dump repeatedly while testing without hitting production again.
 * Imports are always downward. A sync only ever creates a new local database named `<prefix>_<date>`, it never writes back upstream.
 * MySQL, MariaDB, PostgreSQL and SQLite are supported out of the box.
 * Files come down over rsync, and S3 buckets sync with the AWS CLI.
@@ -38,7 +40,7 @@ Then publish the config and seed an example store:
 php artisan rouxt:sync-install
 ```
 
-This publishes `config/sync.php`, writes a `sync-jobs.example.json` reference file next to the store, and adds the real store (`sync-jobs.json`) to your `.gitignore`. The store holds plaintext credentials, so it must never be committed.
+This publishes `config/sync.php`, writes a `sync-jobs.example.json` reference file next to the store, and adds the real store (`sync-jobs.json`) plus the `sync-dumps/` directory to your `.gitignore`. The store holds plaintext credentials and the dumps hold plaintext production data, so neither may ever be committed.
 
 ## Quick start
 
@@ -65,7 +67,11 @@ Add `--yes` to run every job in a group without prompting (useful in scripts). A
 | `files-over-ssh` | Copies a remote directory to a local path | `rsync -az` over SSH |
 | `s3-sync` | Mirrors a bucket to another bucket or a local path | `aws s3 sync` |
 
-The two database types import into a fresh local database named `<prefix>_<date>`. If that name already exists, an interactive run offers to abort, replace, or import under a different name. A non-interactive run (`--yes`) leaves it untouched.
+Both database types work in two phases. First a **fetch** pulls the remote data to a plaintext dump file on disk (`mysqldump` / `pg_dump` over the tunnel for `db-over-ssh`, or `aws s3 cp` plus `gunzip` for `db-from-s3`), sized and advanced per remote table. Then a **load** imports that dump file into a fresh local database named `<prefix>_<date>`, pre-scanning the file for its per-table markers to size the bar and running any after-hooks.
+
+Because the fetched dump is a file, an interactive `db-over-ssh` or `db-from-s3` run that finds a recent dump for the job asks whether to reuse it (skipping production) or pull a fresh one. This makes it cheap to pull once and import many times while testing. A non-interactive run (`--yes`) always pulls fresh.
+
+The load imports into a fresh local database named `<prefix>_<date>`. If that name already exists, an interactive run offers to abort, replace, or import under a different name. A non-interactive run (`--yes`) leaves it untouched.
 
 ## Database drivers
 
@@ -181,6 +187,8 @@ Both also tell an agent that when it lacks the SSH keys or AWS credentials to ru
 ## Security
 
 The store file holds connection details in plaintext, including passwords. `rouxt:sync-install` adds it to `.gitignore`. Keep it out of version control, and prefer SSH keys and AWS profiles over inline passwords where you can.
+
+Fetched database dumps under `sync-dumps/` hold plaintext production data. The dump file is not anonymized (MySQL DEFINER clauses are stripped, but the rows are real); anonymization runs on the imported database through the `anonymize` hook, not on the dump file. `rouxt:sync-install` gitignores the directory too. Treat these files like the store: keep them out of version control.
 
 ## Testing
 

@@ -2,22 +2,19 @@
 
 namespace Rouxtaccess\Sync\Types;
 
-use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Support\Facades\Process;
-use Rouxtaccess\Sync\Concerns\InteractsWithAfterHooks;
-use Rouxtaccess\Sync\Concerns\InteractsWithDatabaseDriver;
+use Rouxtaccess\Sync\Concerns\FetchesAndLoadsDatabase;
 use Rouxtaccess\Sync\Contracts\DatabaseDriver;
+use Rouxtaccess\Sync\Contracts\ProgressReporter;
 use Rouxtaccess\Sync\Contracts\SyncType;
 use Rouxtaccess\Sync\Field;
 use Rouxtaccess\Sync\SyncResult;
 
 use function Laravel\Prompts\note;
-use function Laravel\Prompts\spin;
 
 class DbFromS3SyncType implements SyncType
 {
-    use InteractsWithAfterHooks;
-    use InteractsWithDatabaseDriver;
+    use FetchesAndLoadsDatabase;
 
     public static function key(): string
     {
@@ -51,48 +48,69 @@ class DbFromS3SyncType implements SyncType
         ];
     }
 
-    public function run(array $job, bool $interactive): SyncResult
+    public function run(array $job, bool $interactive, ProgressReporter $progress): SyncResult
     {
         $config = $job['config'] ?? [];
         $driver = $this->driver($config);
-        $intended = $this->targetDatabase($config);
 
-        $target = $this->resolveTarget($driver, $intended, $interactive);
+        $dumpFile = $this->chooseDump($this->jobName($job), $interactive);
+
+        $intended = $this->targetDatabase($config);
+        $target = $this->resolveLoadTarget($driver, $config, $interactive);
 
         if ($target === null) {
             return SyncResult::failure("Local database {$intended} already exists; left as-is.");
         }
 
+        if ($dumpFile === null) {
+            $fetched = $this->fetchDump($driver, $job, $progress);
+
+            if ($fetched instanceof SyncResult) {
+                return $fetched;
+            }
+
+            $dumpFile = $fetched;
+        }
+
+        return $this->loadDump($driver, $job, $dumpFile, $target, $interactive, $progress);
+    }
+
+    /**
+     * Download and decompress the latest S3 dump to a local file.
+     *
+     * @param  array<string, mixed>  $job
+     */
+    protected function fetchDump(DatabaseDriver $driver, array $job, ProgressReporter $progress): SyncResult|string
+    {
+        $config = $job['config'] ?? [];
         $key = $this->latestDumpKey($config);
 
         if ($key === '') {
             return SyncResult::failure("No .sql.gz dumps found in {$config['s3_path']}.");
         }
 
-        $context = ['database' => $target];
-        $hooks = $this->planAfterHooks($job, $context, $interactive);
-
-        if ($driver->createDatabase($target)->failed()) {
-            return SyncResult::failure("Could not create local database {$target}.");
-        }
-
         $uri = rtrim($config['s3_path'], '/').'/'.$key;
+        $dumpFile = $this->dumpStore()->pathFor($this->jobName($job), now()->format('Y_m_d_His'));
 
-        $result = spin(
-            message: "Restoring {$key} into {$target}…",
-            callback: fn (): ProcessResult => Process::timeout(0)->run(['bash', '-c', $this->pipeline($driver, $config, $uri, $target)]),
+        $progress->start("Downloading {$key}");
+
+        $result = $this->streamProcess(
+            ['bash', '-c', $this->downloadPipeline($driver, $config, $uri, $dumpFile)],
+            fn (string $stream, string $line) => null,
         );
 
         if ($result->failed()) {
-            $driver->dropDatabase($target);
+            $progress->finish();
+            @unlink($dumpFile);
             note(trim($result->errorOutput()) ?: 'No error output was captured.');
 
-            return SyncResult::failure('Restore failed. The half-created database was dropped.');
+            return SyncResult::failure("Could not download {$key}.");
         }
 
-        $this->runAfterHooks($hooks, $job, $context);
+        $progress->finish("Downloaded {$key}.");
+        $this->dumpStore()->prune($this->jobName($job));
 
-        return SyncResult::success("Restored {$key} into {$target}.", ['database' => $target]);
+        return $dumpFile;
     }
 
     /**
@@ -111,18 +129,20 @@ class DbFromS3SyncType implements SyncType
     }
 
     /**
+     * Stream the S3 object down, decompress it, optionally sanitize, and write
+     * the SQL to a local file for the import to read.
+     *
      * @param  array<string, mixed>  $config
      */
-    protected function pipeline(DatabaseDriver $driver, array $config, string $uri, string $target): string
+    protected function downloadPipeline(DatabaseDriver $driver, array $config, string $uri, string $dumpFile): string
     {
         $parts = array_filter([
             'aws s3 cp '.escapeshellarg($uri).$this->profileFlag($config).' -',
             'gunzip -c',
             $driver->sanitizePipe(),
-            $driver->importCommand($target),
         ]);
 
-        return 'set -o pipefail; '.implode(' | ', $parts);
+        return 'set -o pipefail; '.implode(' | ', $parts).' > '.escapeshellarg($dumpFile);
     }
 
     /**

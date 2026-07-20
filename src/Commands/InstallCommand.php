@@ -21,7 +21,8 @@ class InstallCommand extends Command
         note('Published config/sync.php.');
 
         $this->seedExample();
-        $this->ignoreStore();
+        $this->ignore(basename((string) config('sync.store')));
+        $this->ignore(basename((string) config('sync.dumps.path')).'/');
 
         note('Done. Run `php artisan rouxt:sync` to configure and run a group.');
 
@@ -47,10 +48,9 @@ class InstallCommand extends Command
         note('Wrote example groups to '.$example.'.');
     }
 
-    protected function ignoreStore(): void
+    protected function ignore(string $entry): void
     {
         $gitignore = base_path('.gitignore');
-        $entry = basename((string) config('sync.store'));
 
         if (! File::exists($gitignore)) {
             File::put($gitignore, $entry."\n");

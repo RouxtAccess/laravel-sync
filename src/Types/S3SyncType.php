@@ -2,16 +2,17 @@
 
 namespace Rouxtaccess\Sync\Types;
 
-use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Support\Facades\Process;
+use Rouxtaccess\Sync\Concerns\StreamsProcessProgress;
+use Rouxtaccess\Sync\Contracts\ProgressReporter;
 use Rouxtaccess\Sync\Contracts\SyncType;
 use Rouxtaccess\Sync\Field;
 use Rouxtaccess\Sync\SyncResult;
 
-use function Laravel\Prompts\spin;
-
 class S3SyncType implements SyncType
 {
+    use StreamsProcessProgress;
+
     public static function key(): string
     {
         return 's3-sync';
@@ -44,7 +45,7 @@ class S3SyncType implements SyncType
         ];
     }
 
-    public function run(array $job, bool $interactive): SyncResult
+    public function run(array $job, bool $interactive, ProgressReporter $progress): SyncResult
     {
         $config = $job['config'] ?? [];
         $command = ['aws', 's3', 'sync', $config['source'], $config['destination']];
@@ -57,13 +58,50 @@ class S3SyncType implements SyncType
             $command = [...$command, '--profile', $config['aws_profile']];
         }
 
-        $result = spin(
-            message: "Syncing {$config['source']} → {$config['destination']}…",
-            callback: fn (): ProcessResult => Process::timeout(0)->run($command),
-        );
+        $progress->start("Syncing {$config['source']} → {$config['destination']}", $this->countObjects($config));
 
-        return $result->failed()
-            ? SyncResult::failure(trim($result->errorOutput()) ?: 'aws s3 sync failed.')
-            : SyncResult::success("Synced {$config['source']} → {$config['destination']}.");
+        $result = $this->streamProcess($command, function (string $stream, string $line) use ($progress): void {
+            if (preg_match('/^(copy|upload|download): \S+ to (\S+)/i', $line, $matches) === 1) {
+                $progress->advance(1, basename($matches[2]));
+            }
+        });
+
+        if ($result->failed()) {
+            $progress->finish();
+
+            return SyncResult::failure(trim($result->errorOutput()) ?: 'aws s3 sync failed.');
+        }
+
+        $progress->finish("Synced {$config['source']} → {$config['destination']}.");
+
+        return SyncResult::success("Synced {$config['source']} → {$config['destination']}.");
+    }
+
+    /**
+     * Count the objects under an S3 source to size the progress bar. Returns null
+     * for a local source (nothing to list) or when the listing fails.
+     *
+     * @param  array<string, mixed>  $config
+     */
+    protected function countObjects(array $config): ?int
+    {
+        $source = (string) $config['source'];
+
+        if (! str_starts_with($source, 's3://')) {
+            return null;
+        }
+
+        $profile = filled(data_get($config, 'aws_profile')) ? ' --profile '.escapeshellarg($config['aws_profile']) : '';
+        $command = 'aws s3 ls '.escapeshellarg(rtrim($source, '/').'/').' --recursive'.$profile.' | wc -l';
+
+        $result = Process::run(['bash', '-c', $command]);
+
+        if ($result->failed()) {
+            return null;
+        }
+
+        $count = (int) trim($result->output());
+
+        return $count > 0 ? $count : null;
     }
 }

@@ -29,6 +29,7 @@ interface SyncType
     /**
      * @param  array<string, mixed>  $job  the full job (name, type, config, after); the type's fields live in $job['config']
      * @param  bool  $interactive  Whether the run may prompt the user (false for --yes / no TTY).
+     * @param  ProgressReporter  $progress  Reports phase progress (tables, files, percent) to the caller.
      */
-    public function run(array $job, bool $interactive): SyncResult;
+    public function run(array $job, bool $interactive, ProgressReporter $progress): SyncResult;
 }

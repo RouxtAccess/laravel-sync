@@ -40,13 +40,44 @@ class PostgresDriver implements DatabaseDriver
         return $result->successful() && trim($result->output()) === '1';
     }
 
-    public function dumpCommand(array $remote, int $port): string
+    public function dumpCommand(array $remote, int $port, bool $verbose = false): string
     {
         return 'PGPASSWORD='.escapeshellarg((string) (data_get($remote, 'db_pass') ?? '')).' pg_dump '
+            .($verbose ? '--verbose ' : '')
             .'--no-owner --no-privileges '
             .'-h 127.0.0.1 -p '.escapeshellarg((string) $port)
             .' -U '.escapeshellarg($remote['db_user']).' '
             .escapeshellarg($remote['db_name']);
+    }
+
+    public function countTablesCommand(array $remote, int $port): ?string
+    {
+        return 'PGPASSWORD='.escapeshellarg((string) (data_get($remote, 'db_pass') ?? '')).' psql '
+            .'-tA -h 127.0.0.1 -p '.escapeshellarg((string) $port)
+            .' -U '.escapeshellarg($remote['db_user'])
+            .' -d '.escapeshellarg($remote['db_name'])
+            .' -c '.escapeshellarg("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';");
+    }
+
+    public function dumpProgressPattern(): ?string
+    {
+        return 'dumping contents of table ';
+    }
+
+    public function dataMarker(): ?string
+    {
+        return '^-- Data for Name: .*Type: TABLE DATA';
+    }
+
+    public function isDumpNoise(string $line): bool
+    {
+        // pg_dump --verbose prefixes every line with `pg_dump: `; only its
+        // errors and warnings are worth surfacing on a failed fetch.
+        if (! str_starts_with($line, 'pg_dump:')) {
+            return false;
+        }
+
+        return ! str_contains($line, 'error:') && ! str_contains($line, 'warning:');
     }
 
     public function importCommand(string $database): string

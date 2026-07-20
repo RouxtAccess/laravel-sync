@@ -2,16 +2,16 @@
 
 namespace Rouxtaccess\Sync\Types;
 
-use Illuminate\Contracts\Process\ProcessResult;
-use Illuminate\Support\Facades\Process;
+use Rouxtaccess\Sync\Concerns\StreamsProcessProgress;
+use Rouxtaccess\Sync\Contracts\ProgressReporter;
 use Rouxtaccess\Sync\Contracts\SyncType;
 use Rouxtaccess\Sync\Field;
 use Rouxtaccess\Sync\SyncResult;
 
-use function Laravel\Prompts\spin;
-
 class FilesOverSshSyncType implements SyncType
 {
+    use StreamsProcessProgress;
+
     public static function key(): string
     {
         return 'files-over-ssh';
@@ -44,13 +44,13 @@ class FilesOverSshSyncType implements SyncType
         ];
     }
 
-    public function run(array $job, bool $interactive): SyncResult
+    public function run(array $job, bool $interactive, ProgressReporter $progress): SyncResult
     {
         $config = $job['config'] ?? [];
         $source = "{$config['ssh']}:".rtrim($config['remote_path'], '/').'/';
         $destination = rtrim($config['local_path'], '/').'/';
 
-        $command = ['rsync', '-az'];
+        $command = ['rsync', '-az', '--info=progress2'];
 
         if (data_get($config, 'delete')) {
             $command[] = '--delete';
@@ -58,13 +58,30 @@ class FilesOverSshSyncType implements SyncType
 
         $command = [...$command, '-e', 'ssh', $source, $destination];
 
-        $result = spin(
-            message: "Syncing {$source} → {$destination}…",
-            callback: fn (): ProcessResult => Process::timeout(0)->run($command),
-        );
+        $progress->start("Syncing {$source} → {$destination}", 100);
+        $reached = 0;
 
-        return $result->failed()
-            ? SyncResult::failure(trim($result->errorOutput()) ?: 'rsync failed.')
-            : SyncResult::success("Synced {$source} → {$destination}.");
+        $result = $this->streamProcess($command, function (string $stream, string $line) use ($progress, &$reached): void {
+            if (preg_match('/(\d+)%/', $line, $matches) !== 1) {
+                return;
+            }
+
+            $percent = (int) $matches[1];
+
+            if ($percent > $reached) {
+                $progress->advance($percent - $reached);
+                $reached = $percent;
+            }
+        });
+
+        if ($result->failed()) {
+            $progress->finish();
+
+            return SyncResult::failure(trim($result->errorOutput()) ?: 'rsync failed.');
+        }
+
+        $progress->finish("Synced {$source} → {$destination}.");
+
+        return SyncResult::success("Synced {$source} → {$destination}.");
     }
 }

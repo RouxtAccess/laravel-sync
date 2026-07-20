@@ -9,6 +9,10 @@ Prefer credentials that do not sit in the file:
 - Use SSH keys and an SSH agent rather than inline passwords for `db-over-ssh` and `files-over-ssh`.
 - Use named AWS profiles rather than inline keys for `db-from-s3` and `s3-sync`.
 
+## Fetched dumps hold production data
+
+A database sync pulls its data to a plaintext dump file under `sync-dumps/` before importing it. These files hold real production rows. The dump itself is not anonymized (MySQL DEFINER clauses are stripped, but the data is untouched); anonymization runs on the imported database through the `anonymize` hook, not on the dump file. `rouxt:sync-install` adds `sync-dumps/` to `.gitignore`. Treat the directory like the store file: keep it out of version control, and do not copy it anywhere production data should not go.
+
 ## The environment guard
 
 The command refuses to run outside `guard.allowed_environments`. Keep production off that list. `--force` exists for the rare case where you must override, and it prints a loud warning when used.

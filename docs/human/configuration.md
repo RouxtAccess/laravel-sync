@@ -5,9 +5,24 @@ Two files matter: `config/sync.php` (committed, shared with your team) and `sync
 ## config/sync.php
 
 - `store`: where the group file lives. Defaults to `base_path('sync-jobs.json')`, override with `SYNC_STORE_PATH`.
+- `dumps.path`: where fetched database dumps are kept on disk. Defaults to `base_path('sync-dumps')`, override with `SYNC_DUMPS_PATH`.
+- `dumps.keep`: how many dumps per job to retain. Defaults to `3`. Older dumps are pruned after each fetch.
 - `guard.allowed_environments`: the environments where the command runs without `--force`. Defaults to `local`, `development`, `testing`.
 - `types`, `database_drivers`, `after_hooks`: the registered classes. Append your own to add behaviour.
 - `anonymizers`: the list run by the anonymize hook. Empty by default.
+
+## Database dumps on disk
+
+Database syncs pull a dump to a file first, then import it, so the same dump can be re-imported for testing without hitting production again. The dump directory is set by `dumps.path` (`SYNC_DUMPS_PATH`), and `dumps.keep` bounds how many dumps per job are kept before older ones are pruned.
+
+```php
+'dumps' => [
+    'path' => env('SYNC_DUMPS_PATH', base_path('sync-dumps')),
+    'keep' => 3,
+],
+```
+
+These files hold plaintext production data, so `rouxt:sync-install` gitignores the directory. Keep it out of version control.
 
 ## Sync types
 

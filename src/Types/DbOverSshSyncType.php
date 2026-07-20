@@ -4,20 +4,18 @@ namespace Rouxtaccess\Sync\Types;
 
 use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Support\Facades\Process;
-use Rouxtaccess\Sync\Concerns\InteractsWithAfterHooks;
-use Rouxtaccess\Sync\Concerns\InteractsWithDatabaseDriver;
+use Rouxtaccess\Sync\Concerns\FetchesAndLoadsDatabase;
 use Rouxtaccess\Sync\Contracts\DatabaseDriver;
+use Rouxtaccess\Sync\Contracts\ProgressReporter;
 use Rouxtaccess\Sync\Contracts\SyncType;
 use Rouxtaccess\Sync\Field;
 use Rouxtaccess\Sync\SyncResult;
 
 use function Laravel\Prompts\note;
-use function Laravel\Prompts\spin;
 
 class DbOverSshSyncType implements SyncType
 {
-    use InteractsWithAfterHooks;
-    use InteractsWithDatabaseDriver;
+    use FetchesAndLoadsDatabase;
 
     public static function key(): string
     {
@@ -56,7 +54,7 @@ class DbOverSshSyncType implements SyncType
         ];
     }
 
-    public function run(array $job, bool $interactive): SyncResult
+    public function run(array $job, bool $interactive, ProgressReporter $progress): SyncResult
     {
         $config = $job['config'] ?? [];
         $driver = $this->driver($config);
@@ -65,16 +63,37 @@ class DbOverSshSyncType implements SyncType
             return SyncResult::failure($driver::label().' has no network port to tunnel to. Use a files-over-ssh job to copy the database file instead.');
         }
 
+        $dumpFile = $this->chooseDump($this->jobName($job), $interactive);
+
         $intended = $this->targetDatabase($config);
-        $target = $this->resolveTarget($driver, $intended, $interactive);
+        $target = $this->resolveLoadTarget($driver, $config, $interactive);
 
         if ($target === null) {
             return SyncResult::failure("Local database {$intended} already exists; left as-is.");
         }
 
-        $context = ['database' => $target];
-        $hooks = $this->planAfterHooks($job, $context, $interactive);
+        if ($dumpFile === null) {
+            $fetched = $this->fetchDump($driver, $job, $progress);
 
+            if ($fetched instanceof SyncResult) {
+                return $fetched;
+            }
+
+            $dumpFile = $fetched;
+        }
+
+        return $this->loadDump($driver, $job, $dumpFile, $target, $interactive, $progress);
+    }
+
+    /**
+     * Open a tunnel, dump the remote database to a local file with per-table
+     * progress, then close the tunnel. Returns the dump path, or a failure.
+     *
+     * @param  array<string, mixed>  $job
+     */
+    protected function fetchDump(DatabaseDriver $driver, array $job, ProgressReporter $progress): SyncResult|string
+    {
+        $config = $job['config'] ?? [];
         $port = $this->freeLocalPort();
         $controlPath = sys_get_temp_dir().'/sync-db-'.getmypid().'-'.$port.'.sock';
 
@@ -82,45 +101,79 @@ class DbOverSshSyncType implements SyncType
             return SyncResult::failure("Could not open an SSH tunnel to {$config['ssh']}.");
         }
 
-        try {
-            if ($driver->createDatabase($target)->failed()) {
-                return SyncResult::failure("Could not create local database {$target}.");
-            }
+        $dumpFile = $this->dumpStore()->pathFor($this->jobName($job), now()->format('Y_m_d_His'));
+        $pattern = $this->toPcre($driver->dumpProgressPattern());
 
-            $result = spin(
-                message: "Dumping {$config['db_name']} and importing into {$target}…",
-                callback: fn (): ProcessResult => Process::timeout(0)->run(['bash', '-c', $this->pipeline($driver, $config, $port, $target)]),
-            );
+        $errorLines = [];
+
+        try {
+            $progress->start("Dumping {$config['db_name']}", $this->remoteTableCount($driver, $config, $port));
+
+            $result = $this->streamProcess(['bash', '-c', $this->dumpPipeline($driver, $config, $port, $dumpFile)], function (string $stream, string $line) use ($progress, $pattern, $driver, &$errorLines): void {
+                if ($pattern !== null && preg_match($pattern, $line) === 1) {
+                    $progress->advance(1, $this->tableFromMarker($line));
+
+                    return;
+                }
+
+                if ($stream === 'err' && ! $driver->isDumpNoise($line)) {
+                    $errorLines[] = $line;
+                }
+            });
         } finally {
             $this->closeTunnel($config, $controlPath);
         }
 
         if ($result->failed()) {
-            $driver->dropDatabase($target);
-            note(trim($result->errorOutput()) ?: 'No error output was captured.');
+            $progress->finish();
+            @unlink($dumpFile);
+            note(trim(implode(PHP_EOL, $errorLines)) ?: trim($result->errorOutput()) ?: 'No error output was captured.');
 
-            return SyncResult::failure('Dump/import failed. The half-created database was dropped.');
+            return SyncResult::failure("Could not dump {$config['db_name']}.");
         }
 
-        $this->runAfterHooks($hooks, $job, $context);
+        $progress->finish();
+        $this->dumpStore()->prune($this->jobName($job));
 
-        return SyncResult::success("Imported into {$target}.", ['database' => $target]);
+        return $dumpFile;
     }
 
     /**
-     * Dump through the tunnel, optionally sanitize, import locally.
+     * Dump the remote database (verbosely, for progress) and optionally sanitize,
+     * writing SQL to a local file.
      *
      * @param  array<string, mixed>  $config
      */
-    protected function pipeline(DatabaseDriver $driver, array $config, int $port, string $target): string
+    protected function dumpPipeline(DatabaseDriver $driver, array $config, int $port, string $dumpFile): string
     {
         $parts = array_filter([
-            $driver->dumpCommand($config, $port),
+            $driver->dumpCommand($config, $port, verbose: true),
             $driver->sanitizePipe(),
-            $driver->importCommand($target),
         ]);
 
-        return 'set -o pipefail; '.implode(' | ', $parts);
+        return 'set -o pipefail; '.implode(' | ', $parts).' > '.escapeshellarg($dumpFile);
+    }
+
+    /**
+     * @param  array<string, mixed>  $config
+     */
+    protected function remoteTableCount(DatabaseDriver $driver, array $config, int $port): ?int
+    {
+        $command = $driver->countTablesCommand($config, $port);
+
+        if ($command === null) {
+            return null;
+        }
+
+        $result = Process::run(['bash', '-c', $command]);
+
+        if ($result->failed()) {
+            return null;
+        }
+
+        $count = (int) trim($result->output());
+
+        return $count > 0 ? $count : null;
     }
 
     /**

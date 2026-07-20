@@ -22,6 +22,18 @@ return [
     'store' => env('SYNC_STORE_PATH', base_path('sync-jobs.json')),
 
     /*
+     * Where fetched database dumps are kept on disk. Database syncs pull a dump to
+     * a file first, then import it, so the same dump can be re-imported for testing
+     * without hitting production again. These files hold plaintext production data,
+     * so the directory is gitignored by `rouxt:sync-install`; `keep` bounds how many
+     * dumps per job are retained (older ones are pruned after each fetch).
+     */
+    'dumps' => [
+        'path' => env('SYNC_DUMPS_PATH', base_path('sync-dumps')),
+        'keep' => 3,
+    ],
+
+    /*
      * Guards against running a sync in a dangerous environment. A sync only ever
      * creates local databases and copies downward, but the guard is a hard stop
      * for the environments listed below. Running outside them requires --force.

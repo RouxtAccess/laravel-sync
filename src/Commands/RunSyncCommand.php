@@ -3,8 +3,11 @@
 namespace Rouxtaccess\Sync\Commands;
 
 use Illuminate\Console\Command;
+use Rouxtaccess\Sync\Contracts\ProgressReporter;
 use Rouxtaccess\Sync\Field;
 use Rouxtaccess\Sync\GroupStore;
+use Rouxtaccess\Sync\Progress\LineProgressReporter;
+use Rouxtaccess\Sync\Progress\PromptsProgressReporter;
 use Rouxtaccess\Sync\Registries\AfterHookRegistry;
 use Rouxtaccess\Sync\Registries\SyncTypeRegistry;
 
@@ -264,7 +267,7 @@ class RunSyncCommand extends Command
             $type = $registry->get($job['type']);
             note("→ {$name} ({$type::label()})");
 
-            $result = $type->run($job, $interactive);
+            $result = $type->run($job, $interactive, $this->progressReporter($interactive));
             $result->ok ? note("✓ {$result->message}") : error("✗ {$result->message}");
             $results[] = $result->ok;
         }
@@ -281,6 +284,20 @@ class RunSyncCommand extends Command
         error($summary);
 
         return self::FAILURE;
+    }
+
+    /**
+     * An interactive run on a TTY gets a live progress bar; otherwise (--yes or a
+     * piped output) progress is appended as plain lines through the command's
+     * output so it stays readable in logs.
+     */
+    protected function progressReporter(bool $interactive): ProgressReporter
+    {
+        if ($interactive && stream_isatty(STDOUT)) {
+            return new PromptsProgressReporter;
+        }
+
+        return new LineProgressReporter(fn (string $message) => $this->line($message));
     }
 
     /**

@@ -43,13 +43,40 @@ class MysqlDriver implements DatabaseDriver
         return $result->successful() && filled(trim($result->output()));
     }
 
-    public function dumpCommand(array $remote, int $port): string
+    public function dumpCommand(array $remote, int $port, bool $verbose = false): string
     {
         return 'MYSQL_PWD='.escapeshellarg((string) (data_get($remote, 'db_pass') ?? '')).' mysqldump '
+            .($verbose ? '--verbose ' : '')
             .'--single-transaction --quick --no-tablespaces --set-gtid-purged=OFF --routines --triggers --events '
             .'-h 127.0.0.1 -P '.escapeshellarg((string) $port)
             .' -u '.escapeshellarg($remote['db_user']).' '
             .escapeshellarg($remote['db_name']);
+    }
+
+    public function countTablesCommand(array $remote, int $port): ?string
+    {
+        return 'MYSQL_PWD='.escapeshellarg((string) (data_get($remote, 'db_pass') ?? '')).' mysql '
+            .'-N -B -h 127.0.0.1 -P '.escapeshellarg((string) $port)
+            .' -u '.escapeshellarg($remote['db_user'])
+            .' -e '.escapeshellarg('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE();')
+            .' '.escapeshellarg($remote['db_name']);
+    }
+
+    public function dumpProgressPattern(): ?string
+    {
+        return '-- Retrieving table structure for table ';
+    }
+
+    public function dataMarker(): ?string
+    {
+        return '^-- Dumping data for table ';
+    }
+
+    public function isDumpNoise(string $line): bool
+    {
+        // mysqldump --verbose writes its progress as SQL comments (`-- …`);
+        // real errors are prefixed `mysqldump: …`.
+        return str_starts_with($line, '-- ');
     }
 
     public function importCommand(string $database): string
