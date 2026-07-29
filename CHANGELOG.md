@@ -2,6 +2,10 @@
 
 All notable changes to `laravel-sync` will be documented in this file. The project follows semantic versioning.
 
+## 3.0.1 - 2026-07-29
+
+* Trimmed the Laravel Boost guidelines to the safety rules and a pointer to the `laravel-sync` skill, cutting the token cost they add to every consuming app. The full detail stays in the skill, which loads on demand.
+
 ## 3.0.0 - 2026-07-20
 
 Database syncs now pull a dump to a local file before importing, and every sync type reports live progress. Both public interfaces changed, so this is a major release.
