@@ -63,6 +63,12 @@ class DbOverSshSyncType implements SyncType
             return SyncResult::failure($driver::label().' has no network port to tunnel to. Use a files-over-ssh job to copy the database file instead.');
         }
 
+        $filtersProblem = $this->filtersProblem($driver, $job);
+
+        if ($filtersProblem !== null) {
+            return SyncResult::failure($filtersProblem);
+        }
+
         $dumpFile = $this->chooseDump($this->jobName($job), $interactive);
 
         $intended = $this->targetDatabase($config);
@@ -80,6 +86,11 @@ class DbOverSshSyncType implements SyncType
             }
 
             $dumpFile = $fetched;
+            $filterFailure = $this->filterDump($job, $dumpFile, $progress);
+
+            if ($filterFailure !== null) {
+                return $filterFailure;
+            }
         }
 
         return $this->loadDump($driver, $job, $dumpFile, $target, $interactive, $progress);

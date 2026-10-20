@@ -53,6 +53,12 @@ class DbFromS3SyncType implements SyncType
         $config = $job['config'] ?? [];
         $driver = $this->driver($config);
 
+        $filtersProblem = $this->filtersProblem($driver, $job);
+
+        if ($filtersProblem !== null) {
+            return SyncResult::failure($filtersProblem);
+        }
+
         $dumpFile = $this->chooseDump($this->jobName($job), $interactive);
 
         $intended = $this->targetDatabase($config);
@@ -70,6 +76,11 @@ class DbFromS3SyncType implements SyncType
             }
 
             $dumpFile = $fetched;
+            $filterFailure = $this->filterDump($job, $dumpFile, $progress);
+
+            if ($filterFailure !== null) {
+                return $filterFailure;
+            }
         }
 
         return $this->loadDump($driver, $job, $dumpFile, $target, $interactive, $progress);

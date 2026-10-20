@@ -5,8 +5,11 @@ namespace Rouxtaccess\Sync\Concerns;
 use Illuminate\Support\Facades\Process;
 use Rouxtaccess\Sync\Contracts\DatabaseDriver;
 use Rouxtaccess\Sync\Contracts\ProgressReporter;
+use Rouxtaccess\Sync\Database\Drivers\MysqlDriver;
 use Rouxtaccess\Sync\Database\DumpStore;
+use Rouxtaccess\Sync\Database\MysqlDumpFilter;
 use Rouxtaccess\Sync\SyncResult;
+use RuntimeException;
 
 use function Laravel\Prompts\note;
 use function Laravel\Prompts\select;
@@ -150,6 +153,68 @@ trait FetchesAndLoadsDatabase
         $count = (int) trim($result->output());
 
         return $count > 0 ? $count : null;
+    }
+
+    /**
+     * The problem with a job's table filters, or null when it has none or they
+     * are usable. Checked before any fetch so a typo never costs a download.
+     *
+     * @param  array<string, mixed>  $job
+     */
+    protected function filtersProblem(DatabaseDriver $driver, array $job): ?string
+    {
+        $filters = data_get($job, 'config.filters');
+
+        if (blank($filters)) {
+            return null;
+        }
+
+        if (! $driver instanceof MysqlDriver) {
+            return 'Table filters only support MySQL and MariaDB dumps.';
+        }
+
+        return MysqlDumpFilter::validate($filters);
+    }
+
+    /**
+     * Trim a freshly fetched dump in place with the job's table filters (skip a
+     * table's data, or keep only its recent rows). Returns a failure, or null
+     * when the dump is ready to load.
+     *
+     * @param  array<string, mixed>  $job
+     */
+    protected function filterDump(array $job, string $dumpFile, ProgressReporter $progress): ?SyncResult
+    {
+        $filters = data_get($job, 'config.filters');
+
+        if (blank($filters)) {
+            return null;
+        }
+
+        $filtered = $dumpFile.'.filtering';
+        $progress->start('Filtering dump', count($filters));
+
+        try {
+            $stats = (new MysqlDumpFilter($filters))->filter($dumpFile, $filtered, function (string $table) use ($progress, $filters): void {
+                if (array_key_exists($table, $filters)) {
+                    $progress->advance(1, $table);
+                }
+            });
+        } catch (RuntimeException $exception) {
+            $progress->finish();
+            @unlink($filtered);
+            @unlink($dumpFile);
+
+            return SyncResult::failure("Could not filter the dump: {$exception->getMessage()}");
+        }
+
+        rename($filtered, $dumpFile);
+
+        $dropped = array_sum(array_column($stats, 'dropped'));
+        $kept = array_sum(array_column($stats, 'kept'));
+        $progress->finish("Filtered dump: dropped {$dropped} rows, kept {$kept} in filtered tables.");
+
+        return null;
     }
 
     protected function dumpStore(): DumpStore
