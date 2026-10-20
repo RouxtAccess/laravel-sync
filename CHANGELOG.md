@@ -2,7 +2,7 @@
 
 All notable changes to `laravel-sync` will be documented in this file. The project follows semantic versioning.
 
-## 3.1.0 - unreleased
+## 3.1.0 - 2026-10-20
 
 * Table filters: a database job can carry a `filters` object that skips a table's data or keeps only its rows from the last N days. The fetched MySQL dump is trimmed before the import, so local copies skip history nobody reads. Filters are validated before the fetch, and a missing filter column fails the job.
 
