@@ -73,6 +73,26 @@ Because the fetched dump is a file, an interactive `db-over-ssh` or `db-from-s3`
 
 The load imports into a fresh local database named `<prefix>_<date>`. If that name already exists, an interactive run offers to abort, replace, or import under a different name. A non-interactive run (`--yes`) leaves it untouched.
 
+## Table filters
+
+Database jobs (MySQL and MariaDB) can trim heavy tables before the import, so a local copy does not pay for years of logs and metrics nobody looks at. Add a `filters` object to the job's `config`, keyed by table name. Each entry either skips the table's data (the table is still created, empty) or keeps only rows whose date column falls within the last N days:
+
+```json
+"config": {
+    "driver": "mysql",
+    "s3_path": "s3://my-bucket/mysql/",
+    "target_prefix": "myapp_recent",
+    "filters": {
+        "activity_log": { "column": "created_at", "days": 28 },
+        "api_requests": { "column": "created_at", "days": 28 },
+        "job_batches": { "column": "created_at", "days": 28 },
+        "telescope_entries": { "skip": true }
+    }
+}
+```
+
+The filter runs on the fetched dump file, before the import. Date and datetime columns are compared as text, integer columns as Unix timestamps, and rows with no date are dropped. Filters are validated before anything is fetched, and a filter column missing from the dump fails the job rather than importing the table unfiltered. A common pattern is a second group (for example `production-recent`) with its own `target_prefix`, so the trimmed copy never gets confused with a full one.
+
 ## Database drivers
 
 `mysql` (MySQL and MariaDB), `pgsql` (PostgreSQL) and `sqlite` are registered by default. Local client settings are read from your app's `config/database.connections.*`, so the tool talks to the same local database your app does.

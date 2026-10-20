@@ -48,6 +48,7 @@ Groups live in the gitignored `sync-jobs.json` (plain JSON; `sync-jobs.example.j
 - Run a group: `php artisan rouxt:sync {group?}`. `--yes` runs every job without prompting; `--force` bypasses the environment guard.
 - Built-in sync types: `db-over-ssh`, `db-from-s3`, `files-over-ssh`, `s3-sync`.
 - Built-in database engines: `mysql`, `pgsql`, `sqlite`. SQLite cannot tunnel; use `files-over-ssh` or `db-from-s3` for it.
+- Database jobs (MySQL/MariaDB) accept `config.filters`, keyed by table: `{"skip": true}` empties the table, `{"column": "created_at", "days": 28}` keeps only recent rows. `Database\MysqlDumpFilter` trims the fetched dump before the load; filters are validated before any fetch and a missing column fails the job.
 - Built-in after-hooks: `swap-env-database`, `run-migrations`, `anonymize`.
 - The environment guard in `config/sync.php` (`guard.allowed_environments`) blocks non-allowed environments unless `--force` is passed.
 - DB syncs fetch a dump to the gitignored `sync-dumps/` dir (path `SYNC_DUMPS_PATH`, `dumps.keep` bounds retention), then import it. The dump holds plaintext production data (not anonymized), so never commit it. An interactive DB run offers to reuse a recent dump (skip production) or pull fresh; `--yes` always pulls fresh.
