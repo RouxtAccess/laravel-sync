@@ -2,6 +2,10 @@
 
 All notable changes to `laravel-sync` will be documented in this file. The project follows semantic versioning.
 
+## 3.1.1 - 2026-11-11
+
+* The import's table count (a `grep` over the local dump that sizes the progress bar) no longer runs under the default 60 second process timeout. On a slow disk a multi-GB dump took longer than that and the whole sync failed after the download and filter had finished. A failed count now leaves the bar unsized instead of aborting.
+
 ## 3.1.0 - 2026-10-20
 
 * Table filters: a database job can carry a `filters` object that skips a table's data or keeps only its rows from the last N days. The fetched MySQL dump is trimmed before the import, so local copies skip history nobody reads. Filters are validated before the fetch, and a missing filter column fails the job.
