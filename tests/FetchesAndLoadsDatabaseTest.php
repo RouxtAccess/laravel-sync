@@ -263,6 +263,20 @@ it('counts the data markers in a dump file', function () {
     File::delete($file);
 });
 
+it('counts dump tables without a process timeout', function () {
+    Process::fake(['*' => Process::result('55')]);
+
+    expect((new FetchLoadHarness)->countTables(failingDriver(), '/tmp/big.sql'))->toBe(55);
+
+    Process::assertRan(fn ($process) => $process->timeout === null);
+});
+
+it('sizes the bar as unknown instead of failing when the table count fails', function () {
+    Process::fake(['*' => Process::result(exitCode: 2, errorOutput: 'grep: /tmp/missing.sql: No such file')]);
+
+    expect((new FetchLoadHarness)->countTables(failingDriver(), '/tmp/missing.sql'))->toBeNull();
+});
+
 it('rolls back and reports only the real error, not the teed table markers, on a failed import', function () {
     Prompt::fake();
 

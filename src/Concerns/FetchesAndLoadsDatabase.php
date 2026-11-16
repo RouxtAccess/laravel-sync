@@ -139,7 +139,9 @@ trait FetchesAndLoadsDatabase
 
     /**
      * Count the tables in a dump file (its per-table data markers) to size the
-     * import bar. Null when the engine has no marker.
+     * import bar. Null when the engine has no marker or the count fails, so a
+     * progress hint never aborts a sync. Untimed, because a multi-GB dump on a
+     * slow disk can take minutes to scan.
      */
     protected function countTablesInDump(DatabaseDriver $driver, string $dumpFile): ?int
     {
@@ -149,7 +151,12 @@ trait FetchesAndLoadsDatabase
             return null;
         }
 
-        $result = Process::run(['bash', '-c', 'grep -cE '.escapeshellarg($marker).' '.escapeshellarg($dumpFile)]);
+        $result = Process::forever()->run(['bash', '-c', 'grep -cE '.escapeshellarg($marker).' '.escapeshellarg($dumpFile)]);
+
+        if ($result->failed()) {
+            return null;
+        }
+
         $count = (int) trim($result->output());
 
         return $count > 0 ? $count : null;
